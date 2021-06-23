@@ -1,0 +1,9 @@
+[package]
+name = "tangerine"
+version = "0.0.1"
+authors = ["Andrew Zitek <alz236@nyu.edu>"]
+edition = "2018"
+[dependencies]
+miller_rabin = "1.0.6"
+num-bigint = { version = "0.4", features = ["rand"] }
+rand = "0.8"
