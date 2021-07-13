@@ -24,17 +24,17 @@ impl MemStore {
 }
 
 impl Storer for MemStore {
-    fn get_generator(&self) -> &BigUint {
-        &self.generator
+    fn get_generator(&mut self) -> BigUint {
+        return self.generator.clone();
     }
-    fn get_members_list(&self) -> &HashMap<Vec<u8>, Vec<u8>> {
-        &self.members
+    fn get_members_list(&mut self) -> &mut HashMap<Vec<u8>, Vec<u8>> {
+        &mut self.members
     }
-    fn get_modulus(&self) -> &BigUint {
-        &self.modulo
+    fn get_modulus(&mut self) -> BigUint {
+        return self.modulo.clone();
     }
-    fn get_state(&mut self) -> &BigUint {
-        &self.state
+    fn get_state(&mut self) -> BigUint {
+        return self.state.clone();
     }
     fn set_state(&mut self, new_state: &BigUint) {
         self.state = new_state.clone();

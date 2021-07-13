@@ -1,16 +1,13 @@
 pub mod store;
 
 use std::io::Write;
-use std::{thread, thread::{JoinHandle}};
 
 use crypto_hash::{Algorithm, Hasher};
 use num_bigint::{BigUint, RandBigInt};
+use num_traits::{Zero, One};
 use rand::Rng;
 
 use store::Storer;
-
-const RSA_KEY_SIZE: usize = 3072;
-const RSA_PRIME_SIZE: usize = RSA_KEY_SIZE / 2;
 
 pub struct SetAccumulator<T: Storer> {
     pub store: T,
@@ -23,25 +20,29 @@ fn hash_byte_sequence(bytes: &[u8]) -> Vec<u8> {
 }
 
 fn miller_rabin(candidate: &BigUint) -> bool {
-    let mut d: BigUint = candidate.clone() - BigUint::from_bytes_be(b"1");
-    let mut t: BigUint = BigUint::from_bytes_be(b"0");
-    while d.modpow(&BigUint::from_bytes_be(b"1"), &BigUint::from_bytes_be(b"2")) == BigUint::from_bytes_be(b"0") {
-        d /= BigUint::from_bytes_be(b"2");
-        t += BigUint::from_bytes_be(b"1");
+    let f0: BigUint = Zero::zero();
+    let f1: BigUint = One::one();
+    let f2: BigUint = BigUint::from_bytes_be(&2_u64.to_be_bytes().to_vec());
+
+    let mut d: BigUint = candidate.clone() - f1.clone();
+    let mut t: BigUint = f0.clone();
+    while d.modpow(&f1, &f2) == f0 {
+        d /= f2.clone();
+        t += f1.clone();
     }
 
     for _trial in 0..5 {
         let mut rng = rand::thread_rng(); // thread-local random generator seeded by system: https://docs.rs/rand/0.8.4/rand/fn.thread_rng.html
-        let a: BigUint = rng.gen_biguint_range(&BigUint::from_bytes_be(b"2"), &(candidate - BigUint::from_bytes_be(b"1")));
-        let mut v: BigUint = a.modpow(&d, &BigUint::from_bytes_be(b"0"));
-        if v != BigUint::from_bytes_be(b"0") {
-            let mut i: BigUint = BigUint::from_bytes_be(b"0");
-            while v != (d.clone() - BigUint::from_bytes_be(b"1")) {
-                if i == t.clone() - BigUint::from_bytes_be(b"1") {
-                    false;
+        let a: BigUint = rng.gen_biguint_range(&f2, &(candidate - f1.clone()));
+        let mut v: BigUint = a.modpow(&d, &candidate);
+        if v != f1 {
+            let mut i: BigUint = f0.clone();
+            while v != (candidate.clone() - f1.clone()) {
+                if i == t.clone() - f1.clone() {
+                    return false;
                 } else {
-                    i = i + BigUint::from_bytes_be(b"1");
-                    v = v.modpow(&BigUint::from_bytes_be(b"2"), &candidate);
+                    i = i + f1.clone();
+                    v = v.modpow(&f2, &candidate);
                 }
             }
         }
@@ -51,15 +52,15 @@ fn miller_rabin(candidate: &BigUint) -> bool {
 }
 
 fn is_prime(candidate: &BigUint) -> bool {
-    let zero: BigUint = BigUint::from_bytes_be(b"0");
-    let one: BigUint = BigUint::from_bytes_be(b"1");
+    let f0: BigUint = Zero::zero();
+    let f1: BigUint = One::one();
 
     // if less than two, not prime
-    if *candidate == zero || *candidate == one {
-        false;
+    if *candidate == f0 || *candidate == f1 {
+        return false;
     }
 
-    let primes: Vec<u64> = vec![
+    let small_primes: Vec<u64> = vec![
         2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61,
         67, 71, 73, 79, 83, 89, 97, 101, 103, 107, 109, 113, 127, 131, 137,
         139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193, 197, 199, 211,
@@ -75,52 +76,35 @@ fn is_prime(candidate: &BigUint) -> bool {
     ];
 
     // eliminate a good deal of candidates by checking first hundred or so primes
-    for prime in primes.iter() {
+    for small_prime in small_primes.iter() {
         // make the prime into a BigUint
-        let prime_bytes: Vec<u8> = prime.to_be_bytes().to_vec();
-        let prime_biguint: BigUint = BigUint::from_bytes_be(&prime_bytes);
+        let small_prime_bytes: Vec<u8> = small_prime.to_be_bytes().to_vec();
+        let small_prime_biguint: BigUint = BigUint::from_bytes_be(&small_prime_bytes);
+
+        // if the candidate *is* one of these small primes, candidate is prime
+        if *candidate == small_prime_biguint {
+            return true;
+        }
 
         // if the candidate is divisible by the prime, candidate is not a prime
-        if candidate.modpow(&one, &prime_biguint) == zero {
-            false;
+        if candidate.modpow(&f1, &small_prime_biguint) == f0 {
+            return false;
         }
     }
 
     return miller_rabin(&candidate);
 }
 
-fn get_prime(size_in_bits: usize) -> BigUint {
-    let mut rng = rand::thread_rng(); // thread-local random generator seeded by system: https://docs.rs/rand/0.8.4/rand/fn.thread_rng.html
-    let mut candidate: BigUint = rng.gen_biguint(size_in_bits as u64);
-    loop {
-        if is_prime(&candidate) {
-            candidate.clone();
-        }
-        candidate += BigUint::from_bytes_be(b"1");
-    }
-}
-
-fn get_distinct_primes(size_in_bits: usize) -> (BigUint, BigUint) {
-    let join_handle_a: JoinHandle<BigUint> = thread::spawn(move || get_prime(size_in_bits));
-    let join_handle_b: JoinHandle<BigUint> = thread::spawn(move || get_prime(size_in_bits));
-    let a: BigUint = join_handle_a.join().unwrap();
-    let mut b: BigUint = join_handle_b.join().unwrap();
-    loop {
-        if a != b {
-            (a.clone(), b);
-        }
-        b = get_prime(size_in_bits);
-    }
-}
-
 fn hash_value_to_prime(value: &[u8], nonce: &[u8]) -> BigUint {
-    let hashed_value_and_nonce: Vec<u8> = [value.to_vec(), nonce.to_vec()].concat();
+    let f1: BigUint = One::one();
+    let value_and_nonce: Vec<u8> = [value.to_vec(), nonce.to_vec()].concat();
+    let hashed_value_and_nonce: Vec<u8> = hash_byte_sequence(&value_and_nonce);
     let mut candidate: BigUint = BigUint::from_bytes_be(&hashed_value_and_nonce);
     loop {
         if is_prime(&candidate) {
-            candidate.clone();
+            return candidate.clone();
         }
-        candidate += BigUint::from_bytes_be(b"1");
+        candidate += f1.clone();
     }
 }
 
@@ -134,9 +118,9 @@ impl<T: Storer> SetAccumulator<T> {
         // hash the value and nonce concatentated and then map to prime
         let exponent: BigUint = hash_value_to_prime(value, &nonce);
         // get modulus
-        let modulus: &BigUint = self.store.get_modulus();
+        let modulus: BigUint = self.store.get_modulus();
         // get current state of generator
-        let state: &BigUint = self.store.get_state();
+        let state: BigUint = self.store.get_state();
         // compute the new state
         let new_state = state.modpow(&exponent, &modulus);
         // update the store with new state
@@ -144,15 +128,15 @@ impl<T: Storer> SetAccumulator<T> {
         // record the value and the nonce used for that value in the members list
         self.store.get_members_list().insert(value.to_vec(), nonce.to_vec());
     }
-    pub fn get_witness(&self, value: &[u8]) -> Option<(&BigUint, Vec<u8>)> {
+    pub fn get_witness(&mut self, value: &[u8]) -> Option<(BigUint, Vec<u8>)> {
         // if this value is not in the member list, no way to compute a witness, return
         if !self.store.get_members_list().contains_key(value) {
             return None;
         }
         // start with the value of the generator
-        let mut witness: &BigUint = self.store.get_generator();
+        let mut witness: BigUint = self.store.get_generator();
         // get the modulus
-        let modulus: &BigUint = self.store.get_modulus();
+        let modulus: BigUint = self.store.get_modulus();
         // for all members
         for (member, nonce) in self.store.get_members_list() {
             // except for the value in question
@@ -160,14 +144,14 @@ impl<T: Storer> SetAccumulator<T> {
                 // compute the prime it was mapped to
                 let exponent: BigUint = hash_value_to_prime(member, nonce);
                 // exponentiate the current state of the witness mod n
-                witness = &witness.modpow(&exponent, &modulus);
+                witness = witness.modpow(&exponent, &modulus);
             }
         }
         // return the completed status of witness, and the nonce used for this value
         // which the verifier will then hash to a prime (which is deterministic), and
         // check that current_state = witness ^ map_to_prime(value, nonce) mod n
-        let nonce: Vec<u8> = *self.store.get_members_list().get(value).unwrap();
-        return Some((witness, nonce));
+        let nonce: Vec<u8> = self.store.get_members_list().get(value).unwrap().to_vec();
+        return Some((witness.clone(), nonce));
     }
 }
 
@@ -176,31 +160,83 @@ mod tests {
     use super::*;
     use crate::store::mem_store::MemStore;
     use std::collections::HashMap;
+    use std::{thread, thread::{JoinHandle}};
+
+    // NOTE: unnecessarily big for test cases
+    // const RSA_KEY_SIZE: usize = 3072;
+    // const RSA_PRIME_SIZE: usize = RSA_KEY_SIZE / 2;
+
+    fn get_prime(size_in_bits: usize) -> BigUint {
+        let mut rng = rand::thread_rng(); // thread-local random generator seeded by system: https://docs.rs/rand/0.8.4/rand/fn.thread_rng.html
+        loop {
+            let candidate: BigUint = rng.gen_biguint(size_in_bits as u64);
+            if is_prime(&candidate) {
+                return candidate.clone();
+            }
+        }
+    }
+
+    fn get_distinct_primes(size_in_bits: usize) -> (BigUint, BigUint) {
+        let join_handle_a: JoinHandle<BigUint> = thread::spawn(move || get_prime(size_in_bits));
+        let join_handle_b: JoinHandle<BigUint> = thread::spawn(move || get_prime(size_in_bits));
+        let a: BigUint = join_handle_a.join().unwrap();
+        let mut b: BigUint = join_handle_b.join().unwrap();
+        loop {
+            if a != b {
+                return (a.clone(), b);
+            }
+            b = get_prime(size_in_bits);
+        }
+    }
+
+    #[test]
+    fn test_is_prime() {
+        let zero: BigUint = BigUint::from_bytes_be(&0_u64.to_be_bytes().to_vec());
+        let one: BigUint = BigUint::from_bytes_be(&1_u64.to_be_bytes().to_vec());
+        let two: BigUint = BigUint::from_bytes_be(&2_u64.to_be_bytes().to_vec());
+        let three: BigUint = BigUint::from_bytes_be(&3_u64.to_be_bytes().to_vec());
+        let twenty_nine: BigUint = BigUint::from_bytes_be(&29_u64.to_be_bytes().to_vec());
+        let eighty_seven: BigUint = twenty_nine.clone() * three;
+        assert_eq!(false, is_prime(&zero));
+        assert_eq!(false, is_prime(&one));
+        assert_eq!(true, is_prime(&two));
+        assert_eq!(true, is_prime(&twenty_nine));
+        assert_eq!(false, is_prime(&eighty_seven));
+
+        let prime: BigUint = BigUint::from_bytes_be(&55340232221128654847_u128.to_be_bytes().to_vec());
+        assert_eq!(true, is_prime(&prime));
+
+        let not_prime: BigUint = BigUint::from_bytes_be(&55340232221128654848_u128.to_be_bytes().to_vec());
+        assert_eq!(false, is_prime(&not_prime));
+
+        // these can be extended and improved
+    }
 
     #[test]
     fn test_add_and_verify() {
         // choose distinct primes
-        let primes: (BigUint, BigUint) = get_distinct_primes(RSA_PRIME_SIZE);
+        let primes: (BigUint, BigUint) = get_distinct_primes(512);
         // initialize an empty list of members <value, nonce> both Vec<u8>
         let members: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
         // compute the modulus
         let modulus: BigUint = primes.0 * primes.1;
-        // choose a generator (TODO: this same as primitive root?)
+        // choose a generator (TODO: how do we know this is a generator?)
         let generator: BigUint = rand::thread_rng().gen_biguint_below(&modulus);
         // instantiate the set-accumulator with all this config
         let mut sa: SetAccumulator<MemStore> = SetAccumulator::new(
             MemStore::new(
-                generator,
+                generator.clone(),
                 members,
-                modulus,
-                generator // TODO: empty state is generator ^ 1?
+                modulus.clone(),
+                generator.clone() // TODO: empty state is generator ^ 1?
             )
         );
         // add a value (value can be *ANY* sequence of bytes)
-        let value: &[u8] = "Hello World!".to_string().as_bytes();
+        let hello_world: String = "Hello World!".to_string();
+        let value: &[u8] = hello_world.as_bytes();
         sa.add(value);
         // compute the witness of this value
-        let (witness, nonce): (&BigUint, Vec<u8>) = sa.get_witness(value).unwrap();
+        let (witness, nonce): (BigUint, Vec<u8>) = sa.get_witness(value).unwrap();
         // self-compute the mapped prime using the nonce (this is a publicly available, deterministic function)
         let exponent: BigUint = hash_value_to_prime(value, &nonce);
         // verify inclusion of this value, using the witness and the mapped prime
